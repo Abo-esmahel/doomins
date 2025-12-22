@@ -70,6 +70,12 @@ class CheckoutController extends Controller
         'icon' => 'paypal',
         'description' => 'ادفع باستخدام حساب باي بال (للمعاملات الدولية)'
     ],
+           [
+        'id' => 'ShamCash',
+        'name' => 'برنامج شام كاش',
+        'icon' => 'ShamCash',
+        'description' => 'تحويل مباشر إلى الحساب الالكتروني'
+           ],
     [
         'id' => 'bank_transfer',
         'name' => 'تحويل بنكي',
