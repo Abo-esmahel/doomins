@@ -55,41 +55,293 @@ class CheckoutController extends Controller
         ]);
     }
 
+        private function getAvailablePaymentMethods(): array
+ {
+       $methods = [
+    [
+        'id' => 'credit_card',
+        'name' => 'بطاقة ائتمان',
+        'icon' => 'credit-card',
+        'description' => 'ادفع باستخدام بطاقة الائتمان أو البنكية (Visa/Mastercard)'
+    ],
+    [
+        'id' => 'paypal',
+        'name' => 'باي بال',
+        'icon' => 'paypal',
+        'description' => 'ادفع باستخدام حساب باي بال (للمعاملات الدولية)'
+    ],
+    [
+        'id' => 'bank_transfer',
+        'name' => 'تحويل بنكي',
+        'icon' => 'bank',
+        'description' => 'تحويل مباشر إلى الحساب البنكي'
+    ],
+    [
+        'id' => 'cash_on_delivery',
+        'name' => 'الدفع عند الاستلام',
+        'icon' => 'package',
+        'description' => 'ادفع نقداً عند استلام الطلب (شائع جداً في سوريا)'
+    ],
+    [
+        'id' => 'stc_pay',
+        'name' => 'STC Pay',
+        'icon' => 'mobile',
+        'description' => 'محفظة إلكترونية عبر الهاتف (للعملاء من سوريا)'
+    ],
+    [
+        'id' => 'omne',
+        'name' => 'أمنية',
+        'icon' => 'smartphone',
+        'description' => 'خدمة الدفع الإلكتروني السورية'
+    ],
+    [
+        'id' => 'mobile_cash',
+        'name' => 'المحفظة المتنقلة',
+        'icon' => 'phone',
+        'description' => 'شحن رصيد والدفع عبر شركات الاتصالات'
+    ],
+    [
+        'id' => 'exchange_offices',
+        'name' => 'مكاتب الصرافة',
+        'icon' => 'dollar-sign',
+        'description' => 'الدفع عبر مكاتب الصرافة المرخصة'
+    ],
+    [
+        'id' => 'western_union',
+        'name' => 'ويسترن يونيون',
+        'icon' => 'globe',
+        'description' => 'تحويل الأموال عبر ويسترن يونيون'
+    ],
+    [
+        'id' => 'money_gram',
+        'name' => 'ماني جرام',
+        'icon' => 'send',
+        'description' => 'خدمة تحويل الأموال العالمية'
+    ],
+    [
+        'id' => 'crypto',
+        'name' => 'عملات رقمية',
+        'icon' => 'bitcoin',
+        'description' => 'الدفع باستخدام العملات المشفرة (مثل Bitcoin)'
+    ],
+    [
+        'id' => 'hawala',
+        'name' => 'الحوالة التقليدية',
+        'icon' => 'users',
+        'description' => 'نظام الحوالات التقليدي المنتشر في المنطقة'
+    ],
+    [
+        'id' => 'wallet',
+        'name' => 'المحفظة الداخلية',
+        'icon' => 'wallet',
+        'description' => 'استخدم رصيد محفظتك الداخلية للدفع الفوري'
+    ],
+    [
+        'id'=>'syriatel_cash',
+        'name'=>'سيريتل كاش',
+        'icon'=>'phone',
+        'description'=>'الدفع عبر خدمة سيريتل كاش في سوريا'
+    ],
+    [
+      'id'=>'mtn_cash',
+        'name'=>'MTN كاش',
+        'icon'=>'phone',
+        'description'=>'الدفع عبر خدمة MTN كاش في سوريا'
+    ]
+     ];
 
 
-    public static function process(Order $order)
+
+        return $methods;
+ }
+
+     public function showPayment($orderId)
     {
+        $order = Order::find($orderId);
+        if(!$order){
+            return response()->json([
+                'success' => false,
+                'message' => 'Order not found'
+            ], 404);
+        }
         $user = $order->user;
         if(!$user){
             return response()->json([
                 'success' => false,
-                'message' => 'المستخدم غير مصرح له',
+                'message' => 'Unauthorized'
             ], 401);
         }
-       if(!$order || $order->user_id !== $user->id){
-        return response()->json([
-            'success' => false,
-            'message' => 'الطلب غير موجود أو لا تملك صلاحية الوصول إليه',
-        ], 404);
-       }
+         if($user->status != 'active'){
+            return response()->json([
+                'success' => false,
+                'message' => 'not active user'
+            ], 401);
+        }
+        $paymentMethods = $this->getAvailablePaymentMethods();
 
 
-     if(true)
+       //طريقة الدفع غير موجودة
+        if(!in_array($order->payment_method, $paymentMethods)) {
+            $order->payment_method = null;
+            $order->save();
+
+
+        }
+
         return response()->json([
-            'message' => 'تم معالجة الدفع بنجاح',
-            'success' => true,
+            'success' => $order->payment_method != null,
             'order' => $order,
-            'paid_at' => now(),
+            'payment_methods' => $paymentMethods
         ]);
-       else return response()->json([
-            'message' => 'فشل في معالجة الدفع',
+    }
+
+
+  public function process(Order $order)
+    {
+        $user = $order->user;
+
+        if (!$user) {
+            return response()->json(['success' => false, 'message' => 'المستخدم غير مصرح له'], 401);
+        }
+
+        if ($user->status != 'active') {
+            return response()->json(['success' => false, 'message' => 'المستخدم غير نشط'], 401);
+        }
+
+        if (!$order || $order->user_id !== $user->id) {
+            return response()->json(['success' => false, 'message' => 'الطلب غير موجود'], 404);
+        }
+
+        // 1. معالجة الدفع عبر المحفظة (فوري)
+        if ($order->payment_method === 'wallet') {
+            return $this->processWalletPayment($order, $user);
+        }
+
+        // 2. معالجة طرق الدفع اليدوية السورية (تتطلب موافقة أدمن)
+        $manualMethods = ['syriatel_cash', 'mtn_cash', 'bank_transfer', 'alharam_transfer', 'usdt'];
+
+        if (in_array($order->payment_method, $manualMethods)) {
+            return $this->processManualPayment($order);
+        }
+
+        // 3. معالجة بوابات الدفع العالمية (إذا توفرت لاحقاً)
+        // if ($order->payment_method === 'paypal') { ... }
+
+        return response()->json([
             'success' => false,
+            'message' => 'طريقة الدفع غير مدعومة حالياً',
         ], 400);
+    }
 
+    /**
+     * معالجة الدفع عبر المحفظة الداخلية
+     */
+    private function processWalletPayment($order, $user)
+    {
+        if ($user->balance < $order->total) {
+            return response()->json([
+                'success' => false,
+                'message' => 'رصيد المحفظة غير كافي. يرجى شحن رصيدك.',
+            ], 400);
+        }
 
+        DB::beginTransaction();
+        try {
+            // خصم الرصيد
+            $user->decrement('balance', $order->total);
 
- }
+            // تحديث حالة الطلب
+            $order->update([
+                'status' => 'paid',
+                'paid_at' => now(),
+            ]);
 
+            // تسجيل المعاملة
+            DB::table('transactions')->insert([
+                'transaction_id' => 'TXN-' . strtoupper(uniqid()),
+                'user_id' => $user->id,
+                'order_id' => $order->id,
+                'type' => 'payment',
+                'status' => 'completed',
+                'amount' => $order->total,
+                'currency' => 'SAR', // أو SYP حسب عملتك
+                'gateway' => 'wallet',
+                'description' => 'دفع فوري من المحفظة للطلب #' . $order->order_number,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            // تفعيل الخدمات (سيرفر/دومين) هنا إذا كان التفعيل تلقائي
+            // $this->activateServices($order);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'تم الدفع بنجاح عبر المحفظة',
+                'order' => $order,
+                'status' => 'paid'
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['success' => false, 'message' => 'حدث خطأ أثناء الدفع: ' . $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * معالجة الدفع اليدوي (سيريتل/MTN/بنك)
+     */
+    private function processManualPayment($order)
+    {
+        // هنا لا نخصم رصيد ولا نضع الحالة paid
+        // بل نضع الحالة pending_payment ونرسل تعليمات التحويل
+
+        // جلب تعليمات الدفع بناء على الطريقة
+        $instructions = $this->getPaymentInstructions($order->payment_method);
+
+        $order->update([
+            'status' => 'pending_payment', // حالة جديدة تعني بانتظار التحويل
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم استلام طلبك. يرجى إتمام عملية التحويل لتفعيل الطلب.',
+            'order' => $order,
+            'status' => 'pending',
+            'action_required' => true,
+            'payment_instructions' => $instructions
+        ]);
+    }
+
+    /**
+     * جلب بيانات التحويل (أرقام الهواتف/الحسابات)
+     */
+    private function getPaymentInstructions($method)
+    {
+        $instructions = [
+            'syriatel_cash' => [
+                'text' => 'يرجى تحويل المبلغ إلى رقم سيريتل كاش التالي وإرفاق رقم العملية.',
+                'account_number' => '093xxxxxxx', // ضع رقمك هنا
+                'merchant_id' => '123456'
+            ],
+            'mtn_cash' => [
+                'text' => 'يرجى تحويل المبلغ إلى رقم MTN كاش التالي.',
+                'account_number' => '094xxxxxxx' // ضع رقمك هنا
+            ],
+            'usdt' => [
+                'text' => 'USDT (TRC20) Address',
+                'wallet_address' => 'TVxxxxxxxxxxxxxxxxxxxxxxxx' // عنوان محفظتك
+            ],
+            'bank_transfer' => [
+                'bank_name' => 'بنك بيمو',
+                'iban' => 'SYxxxxxxxxxxxxxxxxx',
+                'beneficiary' => 'اسم المستفيد'
+            ]
+        ];
+
+        return $instructions[$method] ?? [];
+    }
 
 
 
