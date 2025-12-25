@@ -39,7 +39,7 @@ Route::prefix('auth')->group(function () {
 
  Route::get('/test-omarino', [DomainController::class, 'testLogicboxes']);
 
-Route::prefix('domains')->middleware('auth:sanctum')->group(function () {
+Route::prefix('domains')->group(function () {
 
 
 

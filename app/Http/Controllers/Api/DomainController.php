@@ -417,6 +417,7 @@ public function testLogicboxes()
         'GET'
     );
 
+
     return response()->json($res);
 }
 

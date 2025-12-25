@@ -13,6 +13,7 @@ use Throwable;
 
 class OmarinoService
 {
+    protected string $userAgent = 'LogicBoxes-Reseller-API/1.0';
     protected bool $debug = false;
     protected string $baseUrl;
     protected string $username;
@@ -149,7 +150,7 @@ protected function buildUrl(string $endpoint): string
         return ['_raw' => $rawTrim];
     }
 
-   public function request(string $endpoint, array $params = [], string $method = 'POST', array $options = []): array
+public function request(string $endpoint, array $params = [], string $method = 'POST', array $options = []): array
 {
     $options = array_merge($this->defaultOptions, $options);
     $method = strtoupper($method);
@@ -158,61 +159,46 @@ protected function buildUrl(string $endpoint): string
 
     if ($this->isCircuitOpen($endpoint)) {
         $this->debugLog('circuit.open', ['endpoint' => $endpoint]);
-        return ['success' => false, 'error_origin' => 'circuit', 'error_code' => 'CIRCUIT_OPEN', 'error_exact' => 'circuit_open'];
+        return [
+            'success' => false,
+            'error_origin' => 'circuit',
+            'error_code' => 'CIRCUIT_OPEN',
+            'error_exact' => 'circuit_open'
+        ];
     }
 
     $auth = ['auth-userid' => $this->username, 'api-key' => $this->apiKey];
 
-    // Probe mode (existing)
-    if ($options['debug_probe'] && $this->debug) {
-        $probeResults = [];
-        $placements = ['query','body','headers'];
-        foreach ($placements as $place) {
-            $res = $this->request($endpoint, $params, $method, array_merge($options, ['auth_placement' => $place, 'debug_probe' => false]));
-            $probeResults[$place] = $res;
-        }
-        return ['success' => false, 'error_origin' => 'probe', 'error_code' => 'PROBE_COMPLETE', 'error_exact' => 'probe finished', 'probe' => $probeResults];
-    }
-
-    // Caching
-    $cacheTtl = (int)($options['cache_ttl'] ?? 0);
-    $cacheKey = $this->cacheKeyFor($method, $url, $params);
-    if ($cacheTtl > 0) {
-        $cached = Cache::get($cacheKey);
-        if ($cached !== null) {
-            $this->debugLog('response.cache_hit', ['endpoint' => $endpoint, 'cache_key' => $cacheKey]);
-            return $cached;
-        }
-    }
-
-    // Prepare auth placement
-    $headers = [];
+    $headers = ['User-Agent' => $this->userAgent];
     $bodyParams = $params;
     $queryParams = [];
 
-    if ($options['auth_placement'] === 'headers') {
-        $headers['auth-userid'] = $auth['auth-userid'];
-        $headers['api-key'] = $auth['api-key'];
-    } elseif ($options['auth_placement'] === 'body') {
-        $bodyParams = array_merge($auth, $bodyParams);
-    } else {
-        $queryParams = $auth;
+    switch ($options['auth_placement']) {
+        case 'headers':
+            $headers = array_merge($headers, $auth);
+            break;
+        case 'body':
+            $bodyParams = array_merge($auth, $bodyParams);
+            break;
+        default:
+            $queryParams = $auth;
+            break;
     }
 
     $this->debugLog('request.prepare', [
-        'endpoint' => $endpoint, 'method' => $method, 'url' => $url,
+        'endpoint' => $endpoint,
+        'method' => $method,
+        'url' => $url,
         'auth_placement' => $options['auth_placement'],
         'query' => $this->maskAuth($queryParams),
-        'body'  => $this->maskAuth($bodyParams),
+        'body' => $this->maskAuth($bodyParams),
         'headers' => $this->maskAuth($headers),
     ]);
 
-    $attempt = 0;
     $lastException = null;
     $statsOut = null;
 
-    while ($attempt < max(1, $this->retryAttempts)) {
-        $attempt++;
+    for ($attempt = 1; $attempt <= max(1, $this->retryAttempts); $attempt++) {
         try {
             $client = Http::timeout($this->timeout)->withOptions([
                 'verify' => $options['verify'],
@@ -228,50 +214,69 @@ protected function buildUrl(string $endpoint): string
             if ($method === 'GET') {
                 $response = $client->withHeaders($headers)->get($url, array_merge($queryParams, $bodyParams));
             } else {
-                if ($options['as_form']) {
-                    $response = $client->withHeaders($headers)->asForm()->post($url . (empty($queryParams) ? '' : ('?' . http_build_query($queryParams))), $bodyParams);
-                } else {
-                    $response = $client->withHeaders($headers)->post($url . (empty($queryParams) ? '' : ('?' . http_build_query($queryParams))), $bodyParams);
-                }
+                $response = $options['as_form']
+                    ? $client->withHeaders($headers)->asForm()->post($url . (empty($queryParams) ? '' : ('?' . http_build_query($queryParams))), $bodyParams)
+                    : $client->withHeaders($headers)->post($url . (empty($queryParams) ? '' : ('?' . http_build_query($queryParams))), $bodyParams);
             }
 
             $status = $response->status();
-            $raw = (string) $response->body();
+            $raw = (string)$response->body();
             $parsed = $this->parseResponseBody($raw);
 
-            $this->debugLog('response.received', ['status' => $status, 'raw_len' => strlen($raw), 'parsed_sample' => is_array($parsed) ? array_slice($parsed,0,5) : $parsed, 'transfer_stats' => $statsOut]);
+            $this->debugLog('response.received', [
+                'status' => $status,
+                'raw_len' => strlen($raw),
+                'parsed_sample' => is_array($parsed) ? array_slice($parsed,0,5) : $parsed,
+                'transfer_stats' => $statsOut
+            ]);
 
-            // Handle auth rejection (unauthorized)
             if ($status === 401) {
                 $this->registerFailure($endpoint);
-                return ['success' => false, 'error_origin' => 'omarino_auth', 'error_code' => 'AUTH_REJECTED', 'error_exact' => $parsed['_raw'] ?? $raw, 'status' => 401];
+                $errorDetails = [
+                    'auth_userid' => isset($queryParams['auth-userid']) ? 'sent' : 'missing',
+                    'api_key' => isset($queryParams['api-key']) ? 'sent' : 'missing',
+                    'auth_placement' => $options['auth_placement'],
+                    'response_body' => $parsed,
+                ];
+                return [
+                    'success' => false,
+                    'error_origin' => 'omarino_auth',
+                    'error_code' => 'AUTH_REJECTED',
+                    'error_exact' => $parsed['_raw'] ?? $raw,
+                    'status' => 401,
+                    'details' => $errorDetails
+                ];
             }
 
             if ($status >= 400) {
-                // for 5xx we may retry; for 4xx generally not
                 $this->registerFailure($endpoint);
-                $err = ['success' => false, 'error_origin' => 'omarino_http', 'error_code' => 'HTTP_' . $status, 'error_exact' => $parsed['_raw'] ?? $raw, 'status' => $status];
-                if ($status >= 500 && $attempt < $this->retryAttempts) {
-                    usleep($this->retryDelayMs * 1000 * $attempt);
-                    continue;
-                }
-                return $err;
+                return [
+                    'success' => false,
+                    'error_origin' => 'omarino_http',
+                    'error_code' => 'HTTP_' . $status,
+                    'error_exact' => $parsed['_raw'] ?? $raw,
+                    'status' => $status
+                ];
             }
 
             if (is_array($parsed) && isset($parsed['status']) && strtoupper((string)$parsed['status']) === 'ERROR') {
                 $this->registerFailure($endpoint);
-                return ['success' => false, 'error_origin' => 'omarino_logic', 'error_code' => 'API_ERROR', 'error_exact' => $parsed['message'] ?? ($parsed['_raw'] ?? $raw), 'data' => $parsed];
+                return [
+                    'success' => false,
+                    'error_origin' => 'omarino_logic',
+                    'error_code' => 'API_ERROR',
+                    'error_exact' => $parsed['message'] ?? ($parsed['_raw'] ?? $raw),
+                    'data' => $parsed
+                ];
             }
 
-            // success path
             $this->resetCircuit($endpoint);
-            $resp = ['success' => true, 'data' => $parsed, 'meta' => ['transfer_stats' => $statsOut]];
 
-            if ($cacheTtl > 0) {
-                Cache::put($cacheKey, $resp, $cacheTtl);
-            }
-
-            return $resp;
+            return [
+                'success' => true,
+                'data' => $parsed,
+                'meta' => ['transfer_stats' => $statsOut]
+            ];
 
         } catch (Throwable $e) {
             $lastException = $e;
@@ -279,30 +284,49 @@ protected function buildUrl(string $endpoint): string
             $this->debugLog('request.exception', ['message' => $m, 'class' => get_class($e)]);
             $this->registerFailure($endpoint);
 
-            // classify
-            if (stripos($m, 'ssl') !== false || stripos($m, 'handshake') !== false || stripos($m, 'certificate') !== false) {
-                return ['success' => false, 'error_origin' => 'tls', 'error_code' => 'TLS_HANDSHAKE_FAILED', 'error_exact' => $m];
+            if ($attempt < $this->retryAttempts) {
+                usleep($this->retryDelayMs * 1000 * $attempt);
+                continue;
             }
 
-            if ($attempt >= $this->retryAttempts) {
-                if (stripos($m, 'cURL error') !== false || stripos($m, 'Connection timed out') !== false || stripos($m, 'Connection refused') !== false) {
-                    return ['success' => false, 'error_origin' => 'network', 'error_code' => 'CONNECTION_FAILED', 'error_exact' => $m];
-                }
-                return ['success' => false, 'error_origin' => 'application', 'error_code' => 'UNHANDLED_EXCEPTION', 'error_exact' => $m];
+            if (stripos($m, 'ssl') !== false || stripos($m, 'handshake') !== false) {
+                return [
+                    'success' => false,
+                    'error_origin' => 'tls',
+                    'error_code' => 'TLS_HANDSHAKE_FAILED',
+                    'error_exact' => $m
+                ];
             }
 
-            // sleep before retry
-            usleep($this->retryDelayMs * 1000 * $attempt);
-            continue;
+            if (stripos($m, 'Could not resolve host') !== false) {
+                return [
+                    'success' => false,
+                    'error_origin' => 'network',
+                    'error_code' => 'HOST_UNRESOLVED',
+                    'error_exact' => $m,
+                    'endpoint' => $endpoint,
+                    'url_attempted' => $url
+                ];
+            }
+
+            return [
+                'success' => false,
+                'error_origin' => 'network',
+                'error_code' => 'CONNECTION_FAILED',
+                'error_exact' => $m
+            ];
         }
     }
 
-    // fallback if loop ends
-    if ($lastException) {
-        return ['success' => false, 'error_origin' => 'application', 'error_code' => 'UNHANDLED_EXCEPTION', 'error_exact' => $lastException->getMessage()];
-    }
-    return ['success' => false, 'error_origin' => 'unknown', 'error_code' => 'UNKNOWN', 'error_exact' => 'unknown_error'];
+    return [
+        'success' => false,
+        'error_origin' => 'unknown',
+        'error_code' => 'UNHANDLED_EXCEPTION',
+        'error_exact' => $lastException ? $lastException->getMessage() : 'unknown_error'
+    ];
 }
+
+
 
 
 public function ping(): array
