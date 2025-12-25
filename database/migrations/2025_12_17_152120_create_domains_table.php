@@ -13,45 +13,49 @@ return new class extends Migration {
     $table->enum('tld', [
     // الأساسية
     '.com', '.net', '.org', '.info', '.biz',
-    
+
     // دول عربية
     '.sa', '.ae', '.eg', '.qa', '.om', '.bh', '.kw', '.jo', '.lb',
-    
+
     // دول عالمية
     '.uk', '.us', '.ca', '.de', '.fr', '.au', '.in', '.jp', '.cn',
-    
+
     // تقنية
     '.io', '.ai', '.dev', '.app', '.tech', '.digital', '.cloud',
-    
+
     // تجارية
     '.shop', '.store', '.business', '.company',
-    
+
     // تعليمية
     '.edu', '.academy', '.school',
-    
+
     // حكومية
     '.gov',
-    
+
     // أخرى شائعة
     '.xyz', '.online', '.site', '.world', '.space', '.media',
     '.blog', '.news', '.press', '.reviews', '.guide', '.expert',
-    
+
     // نطاقات مدن
     '.nyc', '.london', '.dubai',
-    
+
     // تخصصية
     '.law', '.medical', '.finance', '.realestate'
-])->default('.com');    $table->decimal('price_monthly', 10, 2);
+])->default('.com');
+    $table->decimal('price_monthly', 10, 2);
     $table->decimal('price_yearly', 10, 2);
     $table->timestamp('expires_at');
     $table->timestamp('expires_at_in_user')->nullable();
     $table->boolean('active_in_user')->default(false);
-    
+    $table->string('idempotency_key')->nullable()->index();
     $table->boolean('available')->default(true);
-    $table->boolean('isActive')->default(true);    
-    $table->enum('status', ['available', 'sold_out'])->default('available');
+    $table->boolean('isActive')->default(true);
+    $table->enum('status', ['available', 'queue','sold_out'])->default('available');
+    $table->json('meta')->nullable(); // any meta info
+    $table->json('raw_response')->nullable();
     $table->timestamps();
-
+    $table->softDeletes();
+    $table->unique(['name','tld','idempotency_key']);
     $table->unique(['name', 'tld']);
 });
     }

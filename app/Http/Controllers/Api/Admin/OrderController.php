@@ -365,109 +365,12 @@ class OrderController extends Controller
     /**
      * إنشاء طلب يدوي
      */
-    public function createManualOrder(Request $request)
-    {
-        $validator = Validator::make($request->all(), [
-            'user_id' => 'required|exists:users,id',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|exists:products,id',
-            'items.*.quantity' => 'required|integer|min:1',
-            'items.*.price' => 'required|numeric|min:0',
-            'payment_method' => 'required|in:credit_card,paypal,bank_transfer,wallet',
-            'status' => 'in:pending,paid,completed',
-            'notes' => 'nullable|string'
-        ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'errors' => $validator->errors()
-            ], 422);
-        }
 
-        DB::beginTransaction();
 
-        try {
-            $user = User::findOrFail($request->user_id);
 
-            // حساب المجموع
-            $subtotal = 0;
-            $itemsData = [];
-
-            foreach ($request->items as $item) {
-                $itemTotal = $item['price'] * $item['quantity'];
-                $subtotal += $itemTotal;
-
-                $itemsData[] = [
-                    'product_id' => $item['product_id'],
-                    'quantity' => $item['quantity'],
-                    'price' => $item['price'],
-                    'total' => $itemTotal
-                ];
-            }
-
-            // إنشاء الطلب
-            $order = Order::create([
-                'user_id' => $user->id,
-                'order_number' => Order::generateOrderNumber(),
-                'subtotal' => $subtotal,
-                'discount_amount' => 0,
-                'tax_amount' => 0,
-                'total_amount' => $subtotal,
-                'status' => $request->status ?? 'pending',
-                'payment_method' => $request->payment_method,
-                'payment_status' => $request->status === 'paid' ? 'paid' : 'pending',
-                'notes' => $request->notes,
-                'paid_at' => $request->status === 'paid' ? now() : null
-            ]);
-
-            // إضافة العناصر
-          
-                // إذا كان الطلب مدفوعاً، تفعيل العنصر
-                if ($order->status === 'paid') {
-                    $orderItem->activate();
-                }
-            }
-
-            // إذا كان مدفوعاً، إنشاء فاتورة
-            if ($order->status === 'paid') {
-                $invoice = $order->createInvoice();
-
-                // تسجيل المعاملة
-                Transaction::create([
-                    'user_id' => $user->id,
-                    'order_id' => $order->id,
-                    'type' => 'payment',
-                    'amount' => $subtotal,
-                    'status' => 'completed',
-                    'gateway' => $request->payment_method,
-                    'transaction_id' => 'MANUAL-' . time(),
-                    'description' => 'طلب يدوي #' . $order->order_number
-                ]);
-            }
-
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'تم إنشاء الطلب بنجاح',
-                'data' => $order->load(['user', 'items.product'])
-            ], 201);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'حدث خطأ في إنشاء الطلب',
-                'error' => $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * الحصول على إحصائيات الطلبات
-     */
-    public function getStats(Request $request)
-    {
+     public function getStats(Request $request)
+     {
         try {
             // تحديد النطاق الزمني
             $period = $request->period ?? 'month'; // day, week, month, year, custom
@@ -549,17 +452,7 @@ class OrderController extends Controller
             ->get();
 
             // المنتجات الأكثر طلباً
-            $topProducts = OrderItem::selectRaw('
-                product_id,
-                COUNT(*) as orders_count,
-                SUM(quantity) as total_quantity,
-                SUM(total) as total_revenue
-            ')
-            ->with('product')
-            ->groupBy('product_id')
-            ->orderByDesc('orders_count')
-            ->limit(10)
-            ->get();
+
 
             return response()->json([
                 'success' => true,
@@ -569,7 +462,6 @@ class OrderController extends Controller
                     'payment' => $paymentStats,
                     'time_series' => $timeStats,
                     'top_customers' => $topCustomers,
-                    'top_products' => $topProducts,
                     'period' => [
                         'start' => $startDate,
                         'end' => $endDate

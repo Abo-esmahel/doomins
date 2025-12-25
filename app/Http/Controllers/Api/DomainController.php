@@ -1,374 +1,423 @@
 <?php
 
 namespace App\Http\Controllers\Api;
-use App\Http\Controllers\Controller;
 
-use App\Models\Domain;
-use App\Models\Product;
-use Carbon\Carbon;
+use App\Http\Controllers\Controller;
+use App\Services\OmarinoService;
+use App\Repositories\DomainRepository;
+use App\Jobs\RegisterDomainJob;
+use App\Jobs\RenewDomainJob;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 
 class DomainController extends Controller
 {
-    // لكل الناس
-    public function index()
+    protected OmarinoService $omarino;
+    protected DomainRepository $repo;
+
+    public function __construct(OmarinoService $omarino, DomainRepository $repo)
     {
-        $domains = Domain::where('isActive', true)
-            ->where('status', 'available')
-            ->with('product')
-            ->orderBy('created_at', 'desc')
-            ->get();
-       
-        $domains->each(function ($domain) {
-            if (!$domain->product) {
-                $product = Product::create([
-                    'name' => $domain->name . '.' . $domain->tld,
-                    'type' => 'domain',
-                    'price_monthly' => $domain->price_monthly,
-                    'price_yearly' => $domain->price_yearly,
-                    'description' => 'نطاق ' . $domain->tld,
-                    'productable_id' => $domain->id,
-                    'productable_type' => Domain::class,
-                ]);
-                $domain->product = $product;
-            }
-        });
-
-        $tlds = Domain::select('tld')
-            ->distinct()
-            ->orderBy('tld')
-            ->pluck('tld');
-         if ($domains->isEmpty()) {
-            return response()->json([
-                'domains' => [],
-                'tlds' => $tlds,
-                'success' => true,
-                'message' => 'No available domains found',
-            ]);
-        }
-
-       return response()->json([
-            'domains' => $domains,
-            'tlds' => $tlds,
-            'success' => true,
-            'message' => 'Domains retrieved successfully',
-        ]);
+        $this->omarino = $omarino;
+        $this->repo = $repo;
     }
 
-    public function search(Request $request)
+protected function serviceResponse(array $serviceResp)
+{
+    if (!empty($serviceResp['success'])) {
+        return response()->json([
+            'success' => true,
+            'status' => $serviceResp['status'] ?? 200,
+            'data' => $serviceResp['data'] ?? null,
+        ], $serviceResp['status'] ?? 200);
+    }
+
+    // map known service error fields into a clearer output
+    $status = $serviceResp['status'] ?? ($serviceResp['error_origin'] === 'omarino_auth' ? 401 : 422);
+    $message = $serviceResp['message'] ?? $serviceResp['error_exact'] ?? 'omarino_error';
+
+    return response()->json([
+        'success' => false,
+        'status' => $status,
+        'message' => $message,
+        'error_origin' => $serviceResp['error_origin'] ?? null,
+        'error_code' => $serviceResp['error_code'] ?? null,
+        'error_details' => $serviceResp['error_details'] ?? $serviceResp['data'] ?? null,
+    ], $status >= 100 && $status < 600 ? $status : 422);
+}
+
+
+
+    protected function findInResponse(array $serviceResp, array $keys)
     {
-        $request->validate([
-            'domain' => 'required|string|min:2',
-            'tlds' => 'nullable|string|in:.com,.net,.org,.sa,.ae,.edu,.gov,.info,.biz',
-        ]);
+        if (empty($serviceResp['success'])) return null;
+        $data = $serviceResp['data'] ?? $serviceResp;
+        if (isset($data['data']) && is_array($data['data'])) {
+            $data = $data['data'];
+        }
 
-        $searchTerm = $request->domain;
-        $selectedTlds = $request->tlds ?? ['.com', '.net', '.org', '.sa', '.ae', '.edu', '.gov', '.info', '.biz',];
-
-     
-        $suggestions = [];
-
-        $domains = Domain::where('name', 'like', '%' . $searchTerm . '%')
-            ->whereIn('tld', $selectedTlds)
-            ->where('status', 'available')
-            ->with('product')
-            ->get();
-
-        $suggestedNames = [
-            $searchTerm . 'tech',
-            $searchTerm . 'online',
-            $searchTerm . 'hub',
-            'my' . $searchTerm,
-            $searchTerm . 'store',
-            $searchTerm . 'blog',
-            $searchTerm . 'site',
-            'get' . $searchTerm,
-            $searchTerm . 'world',
-            $searchTerm . 'app',
-            $searchTerm . 'cloud',
-            $searchTerm . 'digital',
-            $searchTerm . 'shop',
-            'the' . $searchTerm,
-            $searchTerm . 'media',
-            'try' . $searchTerm,
-            $searchTerm . 'space',
-            $searchTerm . 'sites',
-            $searchTerm . 'get',
-        ];
-
-        foreach ($suggestedNames as $name) {
-            foreach ($selectedTlds as $tld) {
-                $domainExists = Domain::where('name', $name)
-                    ->where('tld', $tld)
-                    ->where('status', 'available')
-                    ->exists();
-
-                if (!$domainExists) {
-                    $suggestions[] = [
-                        'name' => $name,
-                        'tld' => $tld,
-                        'full_name' => $name . '.' . $tld,
-                        'price_monthly' => $this->getPriceForTld($tld),
-                        'price_yearly' => $this->getPriceForTld($tld) * 10, // سعر سنوي تقريبي
-                        'available' => true,
-                    ];
+        $search = function ($arr, $keys) use (&$search) {
+            foreach ($keys as $k) {
+                if (is_array($arr) && array_key_exists($k, $arr)) {
+                    return $arr[$k];
                 }
             }
-        }
-
-        $suggestions = array_slice($suggestions, 0, 6);
-       return response()->json([
-            'success' => true,
-            'results' => $domains,
-            'suggestions' => $suggestions,
-            'search_term' => $searchTerm,
-        ]);
-     }
-
-    
-    public function show($id)
-    {
-        $domain = Domain::where('isActive', true)
-            ->where('status', 'available')
-            ->with('product')
-            ->findOrFail($id);
-
-        if (!$domain->product) {
-            $product = Product::create([
-                'name' => $domain->name . '.' . $domain->tld,
-                'type' => 'domain',
-                'price_monthly' => $domain->price_monthly,
-                'price_yearly' => $domain->price_yearly,
-                'description' => 'نطاق ' . $domain->tld,
-                'productable_id' => $domain->id,
-                'productable_type' => Domain::class,
-            ]);
-            $domain->load('product');
-        }
-
-        $similarDomains = Domain::where('tld', $domain->tld)
-            ->where('id', '!=', $domain->id)
-            ->with('product')
-            ->where('isActive', true)
-            ->where('status', 'available')
-            ->limit(4)
-            ->get();
-
-         return response()->json([
-            'domain' => $domain,
-            'similar_domains' => $similarDomains,
-            'success' => true,
-            'message' => 'Domain details retrieved successfully',
-        ]);
-        }
-
-    
-
-    /**
-     *  تسجيل دومين جديد
-     *///Admin
-    public static function store(Request $request)
-    {
-        $user = auth('sanctum')->user();
-        if(!$user){
-            return response()->json([
-                'success' => false,
-                'message' => 'يجب تسجيل الدخول أولا.',
-            ], 401);
-        }
-
-        $request->validate([
-            'name' => 'required|string|min:2|max:63|regex:/^[a-z0-9][a-z0-9-]*[a-z0-9]$/i',
-            'tld' => 'required|string|in:.com,.net,.org,.sa,.ae,.edu,.gov,.info,.biz',
-            'price_monthly' => 'nullable|numeric|min:0',
-            'price_yearly' => 'nullable|numeric|min:0',
-            'expires_at' => 'required|date',
-        ]);
-
-        $name = strtolower($request->name);
-        $tld = $request->tld;
-
-        $exists = Domain::where('name', $name)
-            ->where('tld', $tld)
-            ->exists();
-
-        if ($exists) {
-      return response()->json([
-            'success' => false,
-            'message' => 'الدومين موجود فعلا.',
-        ], 409);
-        }
-
-        DB::beginTransaction();
-
-        try {
-            $domain = Domain::create([
-                'added_by' => $user->id,
-                'name' => $name,
-                'tld' => $tld,
-                'price_monthly' => $request->price_monthly,
-                'price_yearly' => $request->price_yearly,
-                'expires_at' => $request->expires_at,
-                'status' => 'available',
-                'isActive' => true,
-            ]);
-         DB::table('admin_logs')->insert([
-                'admin_id' => $user->id,
-                'action' => 'create',
-                'table_name' => 'domains',
-                'record_id' => $domain->id,
-                'details' => json_encode([
-                    'name' => $domain->name,
-                    'tld' => $domain->tld,
-                    'price_monthly' => $domain->price_monthly,
-                    'price_yearly' => $domain->price_yearly,
-                    'expires_at' => $domain->expires_at,
-                    'status' => $domain->status,
-                    'isActive' => $domain->isActive,
-                    'description' => 'تسجيل دومين جديد ' . $domain->name . '.' . $domain->tld,
-                ]),
-                'ip_address' => request()->ip(),
-            ]);
-
-            $product = Product::create([
-                'name' => $domain->name . '.' . $domain->tld,
-                'type' => 'domain',
-                'price_monthly' => $domain->price_monthly,
-                'price_yearly' => $domain->price_yearly,
-                'description' => 'نطاق ' . $domain->tld,
-                'productable_id' => $domain->id,
-                'productable_type' => Domain::class,
-            ]);
-
-               
-                DB::commit();
-                return response()->json([
-                    'success' => true,
-                    'message' => 'تم تسجيل الدومين بنجاح.',
-                    'domain' => $domain,
-                ], 201);
+            if (is_array($arr)) {
+                foreach ($arr as $v) {
+                    if (is_array($v)) {
+                        $found = $search($v, $keys);
+                        if ($found !== null) return $found;
+                    }
+                }
             }
+            return null;
+        };
 
-        
-           
-
-         catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'حدث خطأ أثناء تسجيل الدومين.',
-            ], 500);
-        }
+        return $search($data, $keys);
     }
 
-    /**
-     * البحث الفوري عن الدومينات (للاستخدام في AJAX)
-     */
-    public function checkAvailability(Request $request)
+
+    protected function extractContactId(array $serviceResp)
     {
-        $request->validate([
-            'domain' => 'required|string|min:2',
-            'tlds' => 'nullable|string|in:.com,.net,.org,.sa,.ae,.edu,.gov,.info,.biz',
-        ]);
-
-        $searchTerm = strtolower($request->domain);
-        $tlds = $request->tlds ?? ['.com', '.net', '.org', '.sa', '.ae', '.edu', '.gov', '.info', '.biz'];
-
-        $results = [];
-
-        foreach ($tlds as $tld) {
-            // التحقق من توفر الدومين في قاعدة البيانات
-            $exists = Domain::where('name', $searchTerm)
-                ->where('tld', $tld)
-                ->exists();
-
-            $results[] = [
-                'domain' => $searchTerm . $tld,
-                'available' => !$exists,
-                'price_monthly' => $this->getPriceForTld($tld),
-                'price_yearly' => $this->getPriceForTld($tld) * 10,
-                'tld' => $tld,
-            ];
-        }
-
-        return response()->json([
-            'success' => true,
-            'results' => $results,
-            'search_term' => $searchTerm,
-        ]);
-    }
-   
-
-  
-
-    //Admin
-    public static function renew(Request $request, $id)
-    {
-        $request->validate([
-            'period' => 'required|in:1,2,3,5,10',
-            'billing_period' => 'required|in:monthly,yearly',
-        ]);
-
-        $domain = Domain::findOrFail($id);
-        if(!Carbon::parse($domain->expires_at)->isPast()){
-            return response()->json([
-                'success' => false,
-                'message' => 'لا يمكن تجديد الدومين قبل انتهاء صلاحيته.',
-            ], 400);    
-        }
-        $user = auth('sanctum')->user();
-         
-         if ($request->billing_period == 'yearly') {
-            $domain->expires_at = Carbon::parse($domain->expires_at)->addYears($request->period);
-            $domain->save();
-        } else {
-            $domain->expires_at = Carbon::parse($domain->expires_at)->addMonths($request->period);
-            $domain->save();
-        }
-
-         DB::table('admin_logs')->insert([
-            'admin_id' => $user->id,
-            'action' => 'update',
-            'table_name' => 'domains',
-            'record_id' => $domain->id,
-            'details' => json_encode([
-                'period' => $request->period,
-                'billing_period' => $request->billing_period,
-                'description' => 'تجديد الدومين ' . $domain->name . '.' . $domain->tld,
-            ]),
-
-            'ip_address' => request()->ip(),
-      
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'تم تجديد الدومين بنجاح.',
-            'domain' => $domain,
-        ]);
-
-        
+        $candidates = ['contact_id', 'contact-id', 'id', 'contactId', 'contactId'];
+        $found = $this->findInResponse($serviceResp, $candidates);
+        return is_scalar($found) ? (string)$found : null;
     }
 
-    /**
-     * دالة مساعدة: الحصول على سعر TLD
-     */
-    private function getPriceForTld($tld)
+
+    protected function extractOrderId(array $serviceResp)
     {
-        $prices = [
-            '.com' => 3,
-            '.net' => 2,
-            '.org' => 2,
-            '.sa' => 2,
-            '.ae' => 2,
-            '.edu' => 3,
-            '.gov' => 5,
-            '.info' => 3,
-            '.biz' => 2,
+        $candidates = ['order-id', 'orderid', 'orderId', 'order_id', 'id'];
+        $found = $this->findInResponse($serviceResp, $candidates);
+        return is_scalar($found) ? (string)$found : null;
+    }
+
+
+    public function searchAnyTld(Request $request)
+    {
+        $data = $request->validate([
+            'name' => 'required|string|max:255',
+            'tlds' => 'sometimes|array',
+            'limit' => 'sometimes|integer|min:1|max:200',
+        ]);
+
+        $tlds = $data['tlds'] ?? null;
+        $limit = $data['limit'] ?? 20;
+
+        $res = $this->omarino->getSuggestions($data['name'], $tlds ?? ['com','net'], $limit);
+
+        return $this->serviceResponse($res);
+    }
+
+
+    public function searchWithTld(Request $request)
+    {
+        $data = $request->validate([
+            'name' => 'required|string|max:255',
+            'tld' => 'required|string|max:50',
+        ]);
+
+        $res = $this->omarino->checkAvailability($data['name'], [$data['tld']]);
+
+        return $this->serviceResponse($res);
+    }
+
+
+    public function searchByPrice(Request $request)
+    {
+        $data = $request->validate([
+            'min' => 'nullable|numeric',
+            'max' => 'nullable|numeric',
+            'tlds' => 'nullable|array',
+        ]);
+
+        $payload = [
+            'min_price' => $data['min'] !== null ? (string)$data['min'] : null,
+            'max_price' => $data['max'] !== null ? (string)$data['max'] : null,
+            'tlds' => isset($data['tlds']) ? implode(',', $data['tlds']) : null,
         ];
 
-        return $prices[$tld] ?? 50;
+        $res = $this->omarino->rawRequest('domains/searchByPrice', $payload, 'GET');
+
+        return $this->serviceResponse($res);
     }
+
+
+    public function searchByTld(Request $request)
+    {
+        $data = $request->validate([
+            'tld' => 'required|string',
+            'query' => 'sometimes|string',
+            'limit' => 'sometimes|integer|max:200',
+        ]);
+
+        $payload = [
+            'tld' => $data['tld'],
+            'query' => $data['query'] ?? '',
+            'limit' => $data['limit'] ?? 50,
+        ];
+
+        $res = $this->omarino->rawRequest('domains/searchByTld', $payload, 'GET');
+
+        return $this->serviceResponse($res);
+    }
+
+
+    public function status(Request $request)
+{
+    $data = $request->validate([
+        'domain' => 'required|string',
+    ]);
+
+    $orderIdResp = $this->omarino->getOrderIdByDomain($data['domain']);
+
+    if (!empty($orderIdResp['success'])) {
+        $orderId = $this->extractOrderId($orderIdResp);
+
+        if ($orderId) {
+            return $this->serviceResponse(
+                $this->omarino->getDomainInfo($orderId)
+            );
+        }
+    }
+
+    // 2️⃣ fallback آمن
+    return $this->serviceResponse(
+        $this->omarino->rawRequest(
+            'domains/details',
+            ['domain-name' => $data['domain']],
+            'GET'
+        )
+    );
+}
+
+
+    public function details(Request $request)
+    {
+        $data = $request->validate(['domain' => 'required|string']);
+        $orderIdResp = $this->omarino->getOrderIdByDomain($data['domain']);
+        if (!empty($orderIdResp['success'])) {
+            $orderId = $this->extractOrderId($orderIdResp);
+            if ($orderId) {
+                $res = $this->omarino->getDomainInfo($orderId);
+                return $this->serviceResponse($res);
+            }
+        }
+
+        $res = $this->omarino->rawRequest('domains/details', ['domain-name' => $data['domain']], 'GET');
+        return $this->serviceResponse($res);
+    }
+
+
+public function purchase(Request $request)
+{
+    $data = $request->validate([
+        'domain'  => 'required|string',
+        'tld'     => 'required|string',
+        'years'   => 'required|integer|min:1',
+        'contact' => 'nullable|array',
+    ]);
+
+    $user = auth('sanctum')->user();
+    if (! $user) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Unauthorized',
+        ], 401);
+    }
+
+    $domainRecord = $this->repo->createIfNotExists([
+        'domain'  => $data['domain'],
+        'tld'     => $data['tld'],
+        'user_id' => $user->id,
+        'status'  => 'queued',
+    ]);
+
+    // بيانات الاتصال (إما من الطلب أو من المستخدم)
+    $contactData = $data['contact'] ?? [
+        'first_name'  => $user->first_name ?? 'First',
+        'last_name'   => $user->last_name ?? 'Last',
+        'email'       => $user->email ?? 'user@example.com',
+        'phone'       => $user->phone ?? '+10000000000',
+        'address'     => $user->address ?? 'Default Address',
+        'city'        => $user->city ?? 'City',
+        'country'     => $user->country ?? 'US',
+        'postal_code' => $user->postal_code ?? '00000',
+        'company'     => $user->company ?? '',
+    ];
+
+    // إنشاء Contact
+    $contactResp = $this->omarino->createContact($contactData);
+
+    if (empty($contactResp['success'])) {
+        $this->repo->updateFromApiResponse($domainRecord, $contactResp);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'contact_creation_failed',
+            'details' => $contactResp,
+        ], 422);
+    }
+
+    $contactId = $this->extractContactId($contactResp);
+
+    if (! $contactId) {
+        return response()->json([
+            'success' => false,
+            'message' => 'contact_id_missing',
+            'raw'     => $contactResp,
+        ], 422);
+    }
+
+    // Payload التسجيل
+    $payload = [
+        'domain-name'           => $data['domain'] . '.' . $data['tld'],
+        'years'                 => (int) $data['years'],
+        'registrant-contact-id' => $contactId,
+        'admin-contact-id'      => $contactId,
+        'tech-contact-id'       => $contactId,
+        'billing-contact-id'    => $contactId,
+    ];
+
+    RegisterDomainJob::dispatch($payload, $domainRecord->id)
+        ->onQueue('domains');
+
+    return response()->json([
+        'success'          => true,
+        'message'          => 'domain_registration_queued',
+        'domain_record_id' => $domainRecord->id,
+    ], 202);
+}
+
+
+
+
+    public function renew(Request $request)
+    {
+        $data = $request->validate(['domain' => 'required|string', 'years' => 'required|integer|min:1']);
+
+        [$name, $tld] = array_pad(explode('.', $data['domain'], 2), 2, '');
+
+        $domainRecord = $this->repo->createIfNotExists([
+            'domain' => $name,
+            'tld' => $tld,
+            'status' => 'renew-queued',
+        ], null);
+
+        RenewDomainJob::dispatch(['domain' => $data['domain'], 'years' => $data['years']], $domainRecord->id)->onQueue('domains');
+
+        return response()->json(['success' => true, 'message' => 'renewal_queued', 'domain_record_id' => $domainRecord->id], 202);
+    }
+
+
+    public function cancel(Request $request)
+    {
+        $data = $request->validate(['domain' => 'required|string']);
+
+        $orderIdResp = $this->omarino->getOrderIdByDomain($data['domain']);
+        if (!empty($orderIdResp['success'])) {
+            $orderId = $this->extractOrderId($orderIdResp);
+            if ($orderId) {
+                $res = $this->omarino->rawRequest('domains/delete', ['order-id' => $orderId], 'POST');
+                return $this->serviceResponse($res);
+            }
+        }
+
+        $res = $this->omarino->rawRequest('domains/delete', ['domain-name' => $data['domain']], 'POST');
+        return $this->serviceResponse($res);
+    }
+
+
+  public function balance(OmarinoService $omarino)
+{
+    return $this->serviceResponse($omarino->getBalance());
+}
+
+
+    public function lock(Request $request)
+    {
+        $data = $request->validate(['domain' => 'required|string', 'lock' => 'required|boolean']);
+
+        $orderIdResp = $this->omarino->getOrderIdByDomain($data['domain']);
+        if (empty($orderIdResp['success'])) {
+            return $this->serviceResponse($orderIdResp);
+        }
+        $orderId = $this->extractOrderId($orderIdResp);
+        if (!$orderId) {
+            return response()->json(['success' => false, 'message' => 'order_id_not_found'], 422);
+        }
+
+        $res = $this->omarino->toggleTransferLock($orderId,
+        $data['lock']);
+        return $this->serviceResponse($res);
+    }
+
+    public function privacy(Request $request)
+    {
+        $data = $request->validate(['domain' => 'required|string', 'enable' => 'required|boolean']);
+
+        $orderIdResp = $this->omarino->getOrderIdByDomain($data['domain']);
+        if (empty($orderIdResp['success'])) {
+            return $this->serviceResponse($orderIdResp);
+        }
+        $orderId = $this->extractOrderId($orderIdResp);
+        if (!$orderId) {
+            return response()->json(['success' => false, 'message' => 'order_id_not_found'], 422);
+        }
+
+        $res = $this->omarino->togglePrivacyProtection($orderId, $data['enable']);
+        return $this->serviceResponse($res);
+    }
+
+
+    public function dnsList(Request $request)
+    {
+        $data = $request->validate(['domain' => 'required|string']);
+        $res = $this->omarino->getDnsRecords($data['domain']);
+        return $this->serviceResponse($res);
+    }
+
+    public function dnsAdd(Request $request)
+    {
+        $data = $request->validate([
+            'domain' => 'required|string',
+            'record' => 'required|array',
+        ]);
+
+        $payload = array_merge(['domain-name' => $data['domain']], $data['record']);
+        $res = $this->omarino->addDnsRecord($payload);
+
+        return $this->serviceResponse($res);
+    }
+
+   public function dnsDelete(Request $request)
+{
+    $data = $request->validate([
+        'domain'    => 'required|string',
+        'record_id' => 'required|integer',
+    ]);
+
+   $res = $this->omarino->deleteDnsRecord(
+    $data['domain'],
+    $data['record_id']
+);
+
+
+    return $this->serviceResponse($res);
+}
+
+
+
+
+public function testLogicboxes()
+{
+    $res = app(OmarinoService::class)->request(
+        'billing/customer-balance',
+        [],
+        'GET'
+    );
+
+    return response()->json($res);
+}
+
 }

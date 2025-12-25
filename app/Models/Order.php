@@ -57,7 +57,16 @@ class Order extends Model
     {
         return $this->cart->items ?? collect();
     }
-
+    public function getProductsAttribute()
+    {
+        return $this->cart->items->map(function ($item) {
+            return $item->product;
+        });
+    }
+    public function getIsPaidAttribute()
+    {
+        return $this->status === 'paid';
+    }
     public function markAsPaid($paymentMethod)
     {
         $this->update([

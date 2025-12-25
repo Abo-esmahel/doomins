@@ -20,6 +20,8 @@ class Domain extends Model
         'updated_at',
     ];
     protected $casts = [
+        'meta' => 'array',
+        'raw_response' => 'array',
         'price_monthly' => 'decimal:2',
         'price_yearly' => 'decimal:2',
         'expires_at' => 'datetime',
@@ -28,10 +30,13 @@ class Domain extends Model
         'available' => 'boolean',
         'status' => 'string',
         'active_in_user' => 'boolean',
-     
         'tld' => 'string',
     ];
 
+      public function getFullNameAttribute()
+    {
+        return "{$this->domain}.{$this->tld}";
+    }
     public function product()
     {
         return $this->morphOne(Product::class, 'productable');
@@ -55,13 +60,13 @@ class Domain extends Model
         return $query->where('available', true);
     }
     public function inactive(){
-     
+
           $this->isActive=false;
     }
     public function active(){
       $this->isActive=true;
     }
-    
+
 
     public function scopeExpiringSoon($query, $days = 30)
     {
@@ -69,9 +74,4 @@ class Domain extends Model
                     ->where('expires_at', '>', now());
     }
 
-    // طريقة للحصول على الاسم الكامل
-    public function getFullNameAttribute()
-    {
-        return $this->name . '.' . $this->tld;
-    }
 }

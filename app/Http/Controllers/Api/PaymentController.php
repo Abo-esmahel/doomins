@@ -13,33 +13,11 @@ use Illuminate\Support\Facades\Mail;
 
 class PaymentController extends Controller
 {
-    // Constructor مع middleware
-    public function __construct()
-    {
-        $this->middleware('auth:sanctum');
-    }
+
+ 
+
 
     // عرض صفحة الدفع
-    public function showPayment($orderId)
-    {
-        $user = $this->getUser();
-
-        $order = Order::where('user_id', $user->id)
-                     ->where('status', 'pending')
-                     ->with('items.product.productable')
-                     ->findOrFail($orderId);
-
-        if ($request->expectsJson()) {
-            return response()->json([
-                'order' => $order,
-                'payment_methods' => $this->getAvailablePaymentMethods($user)
-            ]);
-        }
-
-        $paymentMethods = $this->getAvailablePaymentMethods($user);
-
-        return view('payment.show', compact('order', 'paymentMethods'));
-    }
 
     // معالجة الدفع
     public function processPayment(Request $request, $orderId)
@@ -301,41 +279,7 @@ class PaymentController extends Controller
     }
 
     // الحصول على طرق الدفع المتاحة
-    private function getAvailablePaymentMethods(User $user): array
-    {
-        $methods = [
-            [
-                'id' => 'credit_card',
-                'name' => 'بطاقة ائتمان',
-                'icon' => 'credit-card',
-                'description' => 'ادفع باستخدام بطاقة الائتمان أو البنكية'
-            ],
-            [
-                'id' => 'paypal',
-                'name' => 'باي بال',
-                'icon' => 'paypal',
-                'description' => 'ادفع باستخدام حساب باي بال'
-            ],
-            [
-                'id' => 'bank_transfer',
-                'name' => 'تحويل بنكي',
-                'icon' => 'bank',
-                'description' => 'تحويل بنكي مباشر'
-            ]
-        ];
 
-        // إضافة طريقة الدفع من الرصيد إذا كان الرصيد كافي
-        if ($user->balance > 0) {
-            $methods[] = [
-                'id' => 'wallet',
-                'name' => 'الرصيد',
-                'icon' => 'wallet',
-                'description' => 'استخدم رصيدك الحالي (' . number_format($user->balance, 2) . ' $)'
-            ];
-        }
-
-        return $methods;
-    }
 
     // إرسال إيميل تأكيد الدفع
     private function sendPaymentConfirmationEmail($order, $invoice, $user)
@@ -360,7 +304,7 @@ class PaymentController extends Controller
      */
     private function getUser(): User
     {
-        $user = auth()->user();
+        $user = auth('sanctum')->user();
 
         if (!$user) {
             throw new \Illuminate\Auth\AuthenticationException('يجب تسجيل الدخول أولاً');

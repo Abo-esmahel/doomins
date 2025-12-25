@@ -10,6 +10,8 @@ use App\Http\Controllers\Api\Admin\ServerController as AdminServerController;
 use App\Http\Controllers\Api\DomainController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\ServerController;
+use App\Services\OmarinoService;
+use Illuminate\Http\Request;
 
 /*
 |--------------------------------------------------------------------------
@@ -33,6 +35,57 @@ Route::prefix('auth')->group(function () {
 | Public Services (الخدمات العامة المتاحة للزوار)
 |--------------------------------------------------------------------------
 */
+
+
+ Route::get('/test-omarino', [DomainController::class, 'testLogicboxes']);
+
+Route::prefix('domains')->middleware('auth:sanctum')->group(function () {
+
+
+
+
+
+
+    // Search & info - higher rate limit
+    Route::middleware('throttle:120,1')->group(function () {
+        Route::get('search/any-tld', [DomainController::class,'searchAnyTld']);
+        Route::get('search/tld',     [DomainController::class,'searchWithTld']);
+        Route::get('search/price',   [DomainController::class,'searchByPrice']);
+        Route::get('search/by-tld',  [DomainController::class,'searchByTld']);
+
+        // domain info endpoints
+        Route::get('status',         [DomainController::class,'status']);   // ?domain=example.com
+        Route::get('details',        [DomainController::class,'details']);  // ?domain=example.com
+    });
+
+    // State-changing / sensitive actions - lower rate limit
+    Route::middleware('throttle:10,1')->group(function () {
+        Route::post('purchase',      [DomainController::class,'purchase']);
+        Route::post('renew',         [DomainController::class,'renew']);
+        Route::post('cancel',        [DomainController::class,'cancel']);
+
+        // security actions
+        Route::post('security/lock',    [DomainController::class,'lock']);    // body: domain, lock
+        Route::post('security/privacy', [DomainController::class,'privacy']); // body: domain, enable
+
+        Route::get('balance', [DomainController::class, 'balance']);
+        // DNS management
+        Route::get('dns/list',      [DomainController::class,'dnsList']);   // ?domain=example.com
+        Route::post('dns/add',      [DomainController::class,'dnsAdd']);    // body: domain, record[]
+        Route::post('dns/delete',   [DomainController::class,'dnsDelete']); // body: domain, record_id
+    });
+
+});
+
+
+
+
+
+
+
+
+
+
 
 // خدمات الدومينات العامة (من DomainController.php)
 Route::prefix('public/domains')->group(function () {
@@ -217,4 +270,35 @@ Route::middleware(['auth:sanctum', 'admin'])->prefix('admin')->group(function ()
         Route::post('/{id}/unban', [AdminController::class, 'UnbanUser']);
     });
 
+});
+
+
+
+
+
+
+Route::post('/login', function(Request $request) {
+    $request->validate([
+        'email' => 'required|email',
+        'password' => 'required',
+        'device_name' => 'required'
+    ]);
+
+    // استخدم أول مستخدم في قاعدة البيانات
+    $user = \App\Models\User::first();
+
+    if (!$user || !\Illuminate\Support\Facades\Hash::check($request->password, $user->password)) {
+        return response()->json(['error' => 'بيانات الدخول غير صحيحة'], 401);
+    }
+
+    $token = $user->createToken($request->device_name)->plainTextToken;
+
+    return response()->json([
+        'token' => $token,
+        'user' => $user
+    ]);
+});
+
+Route::middleware('auth:sanctum')->get('/user', function(Request $request) {
+    return $request->user();
 });

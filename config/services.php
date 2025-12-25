@@ -28,6 +28,19 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+ 'omarino' => [
+    'url' => env('OMARINO_API_URL'),
+    // دعم OMARINO_USERNAME أو OMARINO_AUTH_USERID
+    'username' => env('OMARINO_USERNAME', env('OMARINO_AUTH_USERID')),
+    'api_key' => env('OMARINO_API_KEY'),
+    'timeout' => env('OMARINO_TIMEOUT', 60),
+    'retry_attempts' => env('OMARINO_RETRY_ATTEMPTS', 3),
+    'retry_delay_ms' => env('OMARINO_RETRY_DELAY_MS', 500),
+    'debug' => env('OMARINO_DEBUG', false),
+],
+
+
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),
