@@ -11,46 +11,29 @@ use Illuminate\Support\Arr;
 use GuzzleHttp\TransferStats;
 use Throwable;
 
-/**
- * OmarinoService
- *
- * Full-featured LogicBoxes / Omarino HTTP API client for Laravel.
- * - Auth via query (auth-userid & api-key)
- * - GET requests never send a body
- * - POST requests send form-encoded body
- * - Circuit breaker, retries, debug logging, caching
- *
- * Usage:
- *   app(\App\Services\OmarinoService::class)->getBalance();
- */
+
 class OmarinoService
 {
-    // Basic config
     protected string $baseUrl;
     protected string $authUserId;
     protected string $apiKey;
 
-    // Behaviour
     protected int $timeout;
     protected int $retryAttempts;
     protected int $retryDelayMs; // milliseconds
     protected bool $debug;
 
-    // HTTP identity
     protected string $userAgent;
 
-    // Circuit breaker prefix
     protected string $circuitPrefix = 'omarino:circuit:';
 
-    // Default options
     protected array $defaultOptions = [
         'verify' => true,
         'as_form' => true,
-        'auth_placement' => 'query', // query | headers | body (default query)
-        'cache_ttl' => 0, // seconds, 0 = no cache
+        'auth_placement' => 'query', 
+        'cache_ttl' => 0,
     ];
 
-    // debug log path (optional file write)
     protected string $debugLogPath;
 
     public function __construct(array $overrides = [])
@@ -65,7 +48,6 @@ class OmarinoService
         $this->userAgent = 'Mozilla/5.0 (compatible; OmarinoAPI/1.0; +https://pac.com)';
         $this->debugLogPath = storage_path('logs/omarino-debug.log');
 
-        // overrides
         foreach ($overrides as $k => $v) {
             if (property_exists($this, $k)) {
                 $this->$k = $v;
@@ -84,7 +66,6 @@ protected function detectCloudflareHtml(string $raw, array $headers = []): ?arra
             return ['blocked' => true, 'reason' => 'cloudflare_html', 'ray_id' => $ray];
         }
     }
-    // header check
     $hdrs = array_change_key_case($headers, CASE_LOWER);
     if (!empty($hdrs['cf-ray']) || !empty($hdrs['cf-request-id']) || (isset($hdrs['server']) && stripos($hdrs['server'], 'cloudflare') !== false)) {
         return ['blocked' => true, 'reason' => 'cloudflare_headers', 'ray_id' => $hdrs['cf-ray'] ?? null];
@@ -113,7 +94,6 @@ protected function detectCloudflareHtml(string $raw, array $headers = []): ?arra
         try {
             @file_put_contents($this->debugLogPath, json_encode($entry, JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT) . PHP_EOL, FILE_APPEND | LOCK_EX);
         } catch (Throwable $e) {
-            // ignore
         }
     }
 
@@ -163,7 +143,6 @@ protected function detectCloudflareHtml(string $raw, array $headers = []): ?arra
 
         foreach ($params as $k => $v) {
             if (is_array($v)) {
-                // if assoc -> domain like data[key]=value
                 $isAssoc = $this->isAssoc($v);
                 if ($isAssoc) {
                     foreach ($v as $subk => $subv) {
@@ -313,8 +292,6 @@ protected function detectCloudflareHtml(string $raw, array $headers = []): ?arra
         'body'     => $this->maskAuth($bodyParams),
         'headers'  => $this->maskAuth($headers),
     ]);
-
-    // cache read (GET only)
     if ($method === 'GET' && !empty($options['cache_ttl'])) {
         $cacheKey = 'omarino:cache:' . md5($url . '|' . http_build_query($queryParams));
         if ($cached = Cache::get($cacheKey)) {
@@ -351,9 +328,7 @@ protected function detectCloudflareHtml(string $raw, array $headers = []): ?arra
             $raw    = (string) $response->body();
             $parsed = $this->parseResponseBody($raw);
 
-            /* ===============================
-             * Cloudflare BLOCK detection
-             * =============================== */
+           
             $rawLower = strtolower($raw);
             if (
                 $status === 403 &&
@@ -523,7 +498,6 @@ public function checkAvailabilityBulk(array $names, array $tlds = ['com'], array
     public function getSuggestions(string $keyword, array $tlds = ['com'], int $limit = 10, array $options = []): array
     {
         $payload = ['keyword' => $keyword, 'tlds' => $tlds, 'no-of-results' => $limit];
-        // NOTE: some docs show domains/v5/suggest-names without .json and with GET; handled by buildUrl
         return $this->request('domains/v5/suggest-names', $payload, 'GET', $options);
     }
 
@@ -666,13 +640,8 @@ public function addChildNs(string $orderId, string $cns, string $ip, array $opti
         return $this->request('domains/auth-code', ['order-id' => $orderId], 'GET', $options);
     }
 
-    /* =========================
-     * Utilities
-     * ========================= */
 
-    /**
-     * Convenience helper to perform a safe health check — uses a real documented endpoint.
-     */
+  
     public function healthCheck(): array
     {
         $res = $this->getBalance();
@@ -682,9 +651,7 @@ public function addChildNs(string $orderId, string $cns, string $ip, array $opti
         return ['success' => false, 'message' => 'Omarino unreachable', 'details' => $res];
     }
 
-    /**
-     * Get the effective last response body sample for logs — useful in controller debug.
-     */
+ 
     public function extractDebugSample(array $response): array
     {
         return [
