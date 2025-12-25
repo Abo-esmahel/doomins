@@ -29,15 +29,10 @@ Route::prefix('auth')->group(function () {
     Route::post('/password/sendCode', [AuthController::class, 'sendPasswordResetCode']);
 });
 
-// Public Services
-/*
-|--------------------------------------------------------------------------
-| Public Services (الخدمات العامة المتاحة للزوار)
-|--------------------------------------------------------------------------
-*/
 
+Route::post('customer/register', [DomainController::class, 'registerCustomer']);
 
- Route::get('/test-omarino', [DomainController::class, 'testLogicboxes']);
+Route::get('/test-omarino', [DomainController::class, 'testLogicboxes']);
 
 Route::prefix('domains')->group(function () {
 
@@ -284,7 +279,6 @@ Route::post('/login', function(Request $request) {
         'device_name' => 'required'
     ]);
 
-    // استخدم أول مستخدم في قاعدة البيانات
     $user = \App\Models\User::first();
 
     if (!$user || !\Illuminate\Support\Facades\Hash::check($request->password, $user->password)) {
